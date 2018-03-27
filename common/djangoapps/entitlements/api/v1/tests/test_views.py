@@ -12,11 +12,23 @@ from opaque_keys.edx.locator import CourseKey
 
 from course_modes.models import CourseMode
 from course_modes.tests.factories import CourseModeFactory
-from openedx.core.djangoapps.site_configuration.tests.factories import SiteFactory
-from student.models import CourseEnrollment
-from student.tests.factories import TEST_PASSWORD, CourseEnrollmentFactory, UserFactory
+from mock import patch
+from opaque_keys.edx.locator import CourseKey
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
+
+from student.models import CourseEnrollment
+from student.tests.factories import (TEST_PASSWORD, CourseEnrollmentFactory, UserFactory)
+from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
+from openedx.core.djangoapps.site_configuration.tests.factories import SiteFactory
+from openedx.core.djangoapps.schedules.tests.factories import ScheduleConfigFactory, ScheduleFactory
+from courseware.models import (
+    CourseDynamicUpgradeDeadlineConfiguration,
+    DynamicUpgradeDeadlineConfiguration,
+    OrgDynamicUpgradeDeadlineConfiguration
+)
+
+from courseware.date_summary import VerifiedUpgradeDeadlineDate
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +64,7 @@ class EntitlementViewSetTest(ModuleStoreTestCase):
         """
         return {
             "user": user.username,
-            "mode": "verified",
+            "mode": CourseMode.VERIFIED,
             "course_uuid": course_uuid,
             "order_number": "EDX-1001",
         }
@@ -304,6 +316,7 @@ class EntitlementViewSetTest(ModuleStoreTestCase):
         )
         assert course_entitlement.policy == policy
 
+
     def test_add_entitlement_with_support_detail(self):
         """
         Verify that an EntitlementSupportDetail entry is made when the request includes support interaction information.
@@ -358,6 +371,86 @@ class EntitlementViewSetTest(ModuleStoreTestCase):
         )
         # Assert that enrollment mode is now verified
         enrollment_mode = CourseEnrollment.enrollment_mode_for_user(self.user, self.course.id)[0]
+        assert enrollment_mode == course_entitlement.mode
+        assert course_entitlement.enrollment_course_run == enrollment
+        assert results == CourseEntitlementSerializer(course_entitlement).data
+
+    @patch("entitlements.api.v1.views.get_course_runs_for_course")
+    def test_add_entitlement_and_upgrade_audit_enrollment(self, mock_get_course_runs):
+        """
+        Verify that if an entitlement is added for a user, if the user has one upgradeable enrollment
+        that enrollment is upgraded to the mode of the entitlement and linked to the entitlement.
+        """
+        course_uuid = uuid.uuid4()
+        entitlement_data = self._get_data_set(self.user, str(course_uuid))
+        mock_get_course_runs.return_value = [{'key': str(self.course.id)}]
+
+        # Add an audit course enrollment for user.
+        enrollment = CourseEnrollment.enroll(self.user, self.course.id, mode=CourseMode.AUDIT)
+
+        response = self.client.post(
+            self.entitlements_list_url,
+            data=json.dumps(entitlement_data),
+            content_type='application/json',
+        )
+        assert response.status_code == 201
+        results = response.data
+
+        course_entitlement = CourseEntitlement.objects.get(
+            user=self.user,
+            course_uuid=course_uuid
+        )
+        # Assert that enrollment mode is now verified
+        enrollment_mode = CourseEnrollment.enrollment_mode_for_user(self.user, self.course.id)[0]
+        assert enrollment_mode == course_entitlement.mode
+        assert course_entitlement.enrollment_course_run == enrollment
+        assert results == CourseEntitlementSerializer(course_entitlement).data
+
+    @patch("entitlements.api.v1.views.get_course_runs_for_course")
+    def test_add_entitlement_and_upgrade_audit_enrollment_with_dynamic_deadline(self, mock_get_course_runs):
+        """
+        Verify that if an entitlement is added for a user, if the user has one upgradeable enrollment
+        that enrollment is upgraded to the mode of the entitlement and linked to the entitlement regardless of
+        dynamic upgrade deadline being set.
+        """
+        DynamicUpgradeDeadlineConfiguration.objects.create(enabled=True)
+        course = CourseFactory.create(self_paced=True)
+        course_uuid = uuid.uuid4()
+        course_mode = CourseModeFactory(
+            course_id=course.id,
+            mode_slug=CourseMode.VERIFIED,
+            # This must be in the future to ensure it is returned by downstream code.
+            expiration_datetime=now() + timedelta(days=1)
+        )
+
+        # Set up Entitlement
+        entitlement_data = self._get_data_set(self.user, str(course_uuid))
+        mock_get_course_runs.return_value = [{'key': str(course.id)}]
+
+        # Add an audit course enrollment for user.
+        enrollment = CourseEnrollment.enroll(self.user, course.id, mode=CourseMode.AUDIT)
+
+        # Set an upgrade schedule so that dynamic upgrade deadlines are used
+        ScheduleFactory.create(
+            enrollment=enrollment,
+            upgrade_deadline=course_mode.expiration_datetime + timedelta(days=-3)
+        )
+
+        # The upgrade should complete and ignore the deadline
+        response = self.client.post(
+            self.entitlements_list_url,
+            data=json.dumps(entitlement_data),
+            content_type='application/json',
+        )
+        assert response.status_code == 201
+        results = response.data
+
+        course_entitlement = CourseEntitlement.objects.get(
+            user=self.user,
+            course_uuid=course_uuid
+        )
+        # Assert that enrollment mode is now verified
+        enrollment_mode = CourseEnrollment.enrollment_mode_for_user(self.user, course.id)[0]
         assert enrollment_mode == course_entitlement.mode
         assert course_entitlement.enrollment_course_run == enrollment
         assert results == CourseEntitlementSerializer(course_entitlement).data

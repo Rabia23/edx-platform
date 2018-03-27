@@ -167,7 +167,9 @@ class EntitlementViewSet(viewsets.ModelViewSet):
                 course_run_id = CourseKey.from_string(course_run.get('key'))
                 enrollment = CourseEnrollment.get_enrollment(user, course_run_id)
 
-                if enrollment and is_course_run_entitlement_fulfillable(course_run_id, entitlement):
+                if (enrollment and
+                        enrollment.is_active and
+                        is_course_run_entitlement_fulfillable(course_run_id, entitlement)):
                     upgradeable_enrollments.append(enrollment)
 
             # if there is only one upgradeable enrollment, update the mode to the paid entitlement.mode
