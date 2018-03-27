@@ -162,24 +162,18 @@ class EntitlementViewSet(viewsets.ModelViewSet):
             course_runs = get_course_runs_for_course(entitlement.course_uuid)
 
             # check if the user has enrollments for any of the course_runs
-            user_run_enrollments = [
-                CourseEnrollment.get_enrollment(user, CourseKey.from_string(course_run.get('key')))
-                for course_run
-                in course_runs
-                if CourseEnrollment.get_enrollment(user, CourseKey.from_string(course_run.get('key')))
-            ]
+            upgradeable_enrollments = []
+            for course_run in course_runs:
+                course_run_id = CourseKey.from_string(course_run.get('key'))
+                enrollment = CourseEnrollment.get_enrollment(user, course_run_id)
 
-            # filter to just enrollments that can be upgraded.
-            upgradeable_enrollments = [
-                enrollment
-                for enrollment
-                in user_run_enrollments
-                if enrollment.is_active and enrollment.upgrade_deadline and enrollment.upgrade_deadline > timezone.now()
-            ]
+                if enrollment and is_course_run_entitlement_fulfillable(course_run_id, entitlement):
+                    upgradeable_enrollments.append(enrollment)
 
-            # if there is only one upgradeable enrollment, convert it from audit to the entitlement.mode
+            # if there is only one upgradeable enrollment, update the mode to the paid entitlement.mode
             # if there is any ambiguity about which enrollment to upgrade
-            # (i.e. multiple upgradeable enrollments or no available upgradeable enrollment), dont enroll
+            # (i.e. multiple upgradeable enrollments or no available upgradeable enrollment), don't alter
+            # the enrollment
             if len(upgradeable_enrollments) == 1:
                 enrollment = upgradeable_enrollments[0]
                 log.info(
