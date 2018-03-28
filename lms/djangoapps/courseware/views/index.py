@@ -382,6 +382,7 @@ class CoursewareIndex(View):
             'section_title': None,
             'sequence_title': None,
             'disable_accordion': COURSE_OUTLINE_PAGE_FLAG.is_enabled(self.course.id),
+            'chapter_position': self.course.position
         }
         courseware_context.update(
             get_experiment_user_metadata_context(
