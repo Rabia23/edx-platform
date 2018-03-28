@@ -391,7 +391,7 @@ class EntitlementViewSetTest(ModuleStoreTestCase):
             course_id=course.id,
             mode_slug=CourseMode.VERIFIED,
             # This must be in the future to ensure it is returned by downstream code.
-            expiration_datetime=now() + timedelta(days=1)
+            expiration_datetime=now()+timedelta(days=1)
         )
 
         # Set up Entitlement
@@ -404,7 +404,7 @@ class EntitlementViewSetTest(ModuleStoreTestCase):
         # Set an upgrade schedule so that dynamic upgrade deadlines are used
         ScheduleFactory.create(
             enrollment=enrollment,
-            upgrade_deadline=course_mode.expiration_datetime + timedelta(days=-3)
+            upgrade_deadline=course_mode.expiration_datetime+timedelta(days=-3)
         )
 
         # The upgrade should complete and ignore the deadline
